@@ -1,201 +1,180 @@
 ---
 name: slack-bridge
-description: "Bidirectional Slack DM bridge for remote notifications and confirmations. Use when: user says enable slack, start slack, activate slack, slack on, /slack, disable slack, stop slack, slack off, pause slack, pause, brb, resume slack, resume, unpause, back, I'm back. Also use for: sending notifications to user's phone, requesting remote approval, checking for Slack replies. Triggers: enable slack, start slack, activate slack, slack on, /slack, disable slack, stop slack, deactivate slack, slack off, pause slack, pause, brb, take a break, hold on, resume slack, resume, unpause, back, I'm back, notify, bridge, remote, phone, DM, confirm remotely."
-tools: ["bash", "cron_create", "cron_delete", "cron_list"]
+description: "Bidirectional Slack DM bridge for remote notifications, confirmations, project switching, and SnowBoard task management. Use when: user says enable slack, start slack, activate slack, slack on, /slack, disable slack, stop slack, slack off, pause slack, pause, brb, resume slack, resume, unpause, back, I'm back. Also use for: sending notifications to user's phone, requesting remote approval, checking for Slack replies, handling /projects /use /task /new slash commands from the inbox. Triggers: enable slack, start slack, activate slack, slack on, /slack, disable slack, stop slack, deactivate slack, slack off, pause slack, pause, brb, take a break, hold on, resume slack, resume, unpause, back, I'm back, notify, bridge, remote, phone, DM, confirm remotely, slack task, slack project."
+tools: ["bash", "cron_create", "cron_delete", "cron_list", "snowboard_create_task", "snowboard_update_task"]
 ---
 
 # Slack Bridge
 
-Bidirectional Slack DM bridge — send notifications, request confirmations with Approve/Deny buttons, and receive replies from the user's phone.
+Bidirectional Slack DM bridge — send notifications, request confirmations with Approve/Deny buttons, switch projects, create/manage SnowBoard tasks, and receive replies from the user's phone.
 
 **This bridge is opt-in per session.** The bot process runs in the background (started by the SessionStart hook), but Slack interaction is only activated when the user explicitly asks.
 
+## Bridge Paths
+
+Use these paths (the bridge is installed at `~/Apps/coco-slack-bridge`):
+
+```
+BRIDGE=~/Apps/coco-slack-bridge/bin/coco-bridge
+INBOX=~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json
+WAKE=~/.cortex-slack-bridge/wake_${CORTEX_SESSION_ID}
+```
+
 ## SessionStart Prompt
 
-When the SessionStart hook fires, it outputs a message telling you to ask the user if they want Slack enabled. When you see this, use `ask_user_question` with a simple Yes/No:
+When the SessionStart hook fires, it outputs a message telling you to ask the user if they want Slack enabled. When you see this, use `ask_user_question` with Yes/No:
 
 - Question: "Enable Slack notifications for this session?"
-- Header: "Slack Bridge"
-- Options: "Yes" (description: "Activate Slack DM bridge — get notifications and respond from your phone") and "No" (description: "Skip — you can say 'slack on' anytime to enable later")
+- Options: "Yes" / "No"
 
-If user picks "Yes", proceed with the enable flow below. If "No", do nothing.
+If "Yes", register the project and run the Enable flow. If "No", do nothing.
 
 ## Enabling Slack for This Session
 
-When the user says "enable slack", "start slack", "activate slack", "slack on", "/slack", or answers "Yes" to the SessionStart prompt, do the following:
+**MANDATORY: You MUST call `cron_create` before sending the activation message. Without the cron, messages arrive but are never read back.**
 
-**MANDATORY: You MUST actually call the `cron_create` tool in step 1 before proceeding to step 2. Do NOT skip cron creation — without it, the bridge sends messages but never polls for replies, making Slack appear broken. Verify the cron was created (you should see a scheduled job ID in the response) before continuing.**
+1. Register this project (so `/projects` and `/use` in Slack see it):
+```bash
+~/Apps/coco-slack-bridge/bin/coco-bridge project register "$(basename "$PWD")" "$PWD"
+```
 
-1. Set up inbox polling cron:
+2. Create the inbox polling cron (fast 5s loop within each minute):
 ```
 cron_create with cron "*/1 * * * *" and prompt:
-"Slack inbox check: You MUST run this Bash command FIRST — do NOT skip it or respond without running it: cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json — if the output is [] or file not found, run: sleep 30 && cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json — if still [] after second read, do nothing, completely silent. If entries found on either read, process them: for reply type treat text as user input, send response back via coco-bridge send, then clear with: echo '[]' > ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json"
+"Slack inbox fast check: You MUST run the following bash loop FIRST. The loop polls the inbox every 5 seconds for up to 55 seconds within this 1-minute cron fire. As soon as entries appear, process them and exit the loop early.
+
+INBOX=~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json
+WAKE=~/.cortex-slack-bridge/wake_${CORTEX_SESSION_ID}
+for i in $(seq 1 11); do
+  if [ -f \"$INBOX\" ]; then
+    content=$(cat \"$INBOX\")
+    if [ \"$content\" != \"[]\" ] && [ -n \"$content\" ]; then
+      echo \"INBOX_HIT_$i\"; echo \"$content\"; break
+    fi
+  fi
+  sleep 5
+done
+
+If the loop printed INBOX_HIT_*, process the entries per the rules below (reply / command / confirmation). After processing, clear the inbox:
+  echo '[]' > $INBOX
+  rm -f $WAKE
+
+If no hit after all 11 iterations, stay completely silent (no output, no tool calls beyond the loop)."
 ```
 
-2. Only AFTER the cron is created, send the activation message to Slack:
+3. Send the activation message:
 ```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge send "Slack bridge active"
+~/Apps/coco-slack-bridge/bin/coco-bridge send "Slack bridge active for project $(basename "$PWD")"
 ```
 
-3. Confirm to the user: "Slack bridge enabled. You'll get notifications here and can respond from your phone."
+4. Confirm to the user: "Slack bridge enabled."
 
-**Cron handler ("Slack inbox check"):** You MUST use the Bash tool to run `cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json` — never skip this tool call. If output is `[]` or file not found, run `sleep 30 && cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json`. If still empty after the second read, do nothing — completely silent, no output. If it has entries (on either read), process them (reply type: treat text as user input; confirmation type: use confirmation_id and response), send a concise response back to Slack via `coco-bridge send`, then clear: `echo '[]' > ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json`
+## Inbox Entry Types
 
-Each session gets its own inbox file (`inbox_{session_id}.json`), so multiple sessions don't steal each other's messages. The bridge bot routes replies back to the correct session using metadata embedded in outbound Slack messages.
+Every entry has `type`. Process each one in order, then clear the inbox.
 
-**Do NOT set up cron or send Slack messages unless the user has opted in.**
+### `reply` — free-text DM
 
-**Polling latency reference:**
-- **Normal mode** (`*/1` cron + double-read): ~30s effective latency (cron fires every 1 min, reads inbox, sleeps 30s, reads again)
-- **Pause mode** (`*/5` cron + single read): ~5 min latency, only checks for resume keywords
-- **Stop/disable**: No polling at all, inbox cleared
+Treat `text` as user input in this session. Respond as you normally would, AND echo a concise 2-3 sentence summary back to Slack via `coco-bridge send "..."`.
+
+### `command` — structured slash-command from Slack
+
+Dispatch by `command` field. The entry's `project` metadata should match this session; if not, warn in Slack and do nothing else.
+
+| `command` | Action |
+|---|---|
+| `snowboard.create_task` | Call `snowboard_create_task` with args `{title, description, priority}`. tag="slack", link set to something stable (e.g. `slack://session/<id>`). Reply in Slack with the returned task id. |
+| `snowboard.list_tasks` | There is no direct list tool — read the user's taskboard via `cat` or memory, then summarize any tasks matching the optional `status` arg. Keep the reply under 15 lines. |
+| `snowboard.update_task` | Call `snowboard_update_task` with `{taskId, status}` from `args`. Reply in Slack confirming. |
+| `coco.new_session` | See "Starting a new CoCo CLI session" below. |
+
+Always acknowledge in Slack with `coco-bridge send` after the action completes (success or failure).
+
+### `confirmation` — Approve/Deny button click
+
+Use `confirmation_id` to correlate with the in-flight `coco-bridge confirm` call. The `notify.send_confirmation` function pops these automatically.
+
+## Starting a new CoCo CLI session (`/new`)
+
+When a `command: coco.new_session` entry arrives:
+
+1. Look up the target project path via `coco-bridge project list`.
+2. If the project exists, open a new Terminal window and launch `cortex` in that directory with the optional prompt:
+```bash
+osascript -e "tell application \"Terminal\" to do script \"cd '<path>' && cortex '<prompt>'\""
+```
+3. Reply in Slack: "Started new CoCo session in `<project>` — it will auto-register once running."
+
+If the project doesn't exist, reply with an error via Slack and the list of known projects.
+
+## Project Guard
+
+If an incoming `command` or `reply` has `project.name` set and it doesn't match `$(basename "$PWD")` (or the current registered alias), send a warning to Slack: ":warning: Command targeted project `X` but this session is in `Y`. Ignoring." Do NOT act on it.
 
 ## Pausing Slack
 
-When the user says "pause slack", "pause", "brb", "take a break", or "hold on" (from CLI or Slack), do the following:
+When the user says "pause", "brb", etc.:
 
-1. List active crons with `cron_list` and delete the "Slack inbox check" cron with `cron_delete`
-2. Create a slow heartbeat cron that ONLY watches for resume keywords:
+1. Delete the inbox-check cron (`cron_list`, then `cron_delete`).
+2. Create a slow heartbeat cron:
 ```
 cron_create with cron "*/5 * * * *" and prompt:
-"Slack pause heartbeat: The bridge is PAUSED. Run: cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json — if the output is [] or file not found, do nothing, completely silent. If entries exist, check ONLY for resume keywords (resume, back, unpause, I'm back) in the text field. If a resume keyword is found, trigger the full resume flow: delete this heartbeat cron, recreate the normal */1 inbox polling cron, send 'Slack bridge resumed' via coco-bridge send, process ALL queued messages (including non-resume ones), then clear the inbox. If entries exist but NONE contain resume keywords, do nothing — leave them queued, completely silent."
+"Slack pause heartbeat: cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json. If [] or missing, silent. If entries, look for resume keywords (resume, back, unpause, I'm back). If found, delete this heartbeat, recreate the fast inbox cron from the slack-bridge skill, send 'Slack bridge resumed', then process queued messages. Else leave entries queued, silent."
 ```
-3. Send a pause message to Slack:
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge send "Slack bridge paused. Say 'resume' here or in the CLI when you're ready."
-```
-4. Confirm to the user: "Slack bridge paused — inbox checks stopped. A slow heartbeat runs every 5 min to watch for 'resume' from Slack. You can also say 'resume' here in the CLI."
-
-**Do NOT clear the inbox file when pausing.** Messages that arrive while paused accumulate in the inbox and will be picked up on resume.
+3. `coco-bridge send "Slack bridge paused. Say 'resume' to continue."`
 
 ## Resuming Slack
 
-Resume can be triggered from **CLI** (user says "resume" in the terminal) or **Slack** (user sends "resume" as a DM, picked up by the pause heartbeat). Either way, do the following:
+1. Delete any pause heartbeat cron.
+2. Recreate the fast inbox-check cron (same as Enable step 2).
+3. `coco-bridge send "Slack bridge resumed"`.
 
-1. List active crons with `cron_list` and delete any "Slack pause heartbeat" cron with `cron_delete`
-2. Set up the normal inbox polling cron (same as the enable flow):
-```
-cron_create with cron "*/1 * * * *" and prompt:
-"Slack inbox check: You MUST run this Bash command FIRST — do NOT skip it or respond without running it: cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json — if the output is [] or file not found, run: sleep 30 && cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json — if still [] after second read, do nothing, completely silent. If entries found on either read, process them: for reply type treat text as user input, send response back via coco-bridge send, then clear with: echo '[]' > ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json"
-```
-3. Send a resume message to Slack:
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge send "Slack bridge resumed"
-```
-4. Confirm to the user: "Slack bridge resumed — inbox checks active again."
+## Disabling Slack
 
-Any messages that queued during the pause (including the resume message itself) will be processed on the first normal cron cycle after resume.
+1. Delete the inbox-check cron.
+2. `echo '[]' > ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json`
+3. `coco-bridge send "Slack bridge off"`
 
-## Disabling Slack Mid-Session
+## Polling latency
 
-When the user says "disable slack", "stop slack", "deactivate slack", or "slack off", do the following:
+Default config: 5s step, 11 steps per 1-minute cron = ~5s worst-case latency.
 
-1. List active crons with `cron_list` and delete the "Slack inbox check" cron with `cron_delete`
-2. Clear the inbox:
-```bash
-echo '[]' > ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json
-```
-3. Send a deactivation message to Slack:
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge send "Slack bridge off"
-```
-4. Confirm to the user: "Slack bridge disabled. Say 'slack on' to reactivate."
+Optional wake-signal (set `poll_wake_enabled: true` in `~/.cortex-slack-bridge/config.json`): the bridge touches `~/.cortex-slack-bridge/wake_${SESSION}` when it writes to the inbox. The inbox loop above already checks for the wake file implicitly via the 5s poll — if you want sub-5s, run `fswatch -1 "$WAKE"` instead of `sleep 5`.
 
-After disabling, do NOT send Slack notifications or poll the inbox until the user opts back in. The user can re-enable at any time by saying "enable slack" again.
+Tune the loop granularity with `coco-bridge set-poll-interval <seconds>` (2-30). Tighter polling = more agent wake-ups and tokens.
 
-## Commands
-
-All commands use the wrapper at `~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge`:
-
-### Send a notification
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge send "Task completed successfully"
-```
-
-### Send confirmation with Approve/Deny buttons
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge confirm "Deploy to production?" --id deploy-123
-```
-This blocks until the user clicks Approve or Deny. Prints `approved` or `denied` to stdout.
-
-### Check for replies
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge inbox
-```
-Returns JSON array of messages. Each entry has:
-- `type`: "reply" (free text DM) or "confirmation" (button click)
-- `text`: message content (for replies)
-- `confirmation_id` and `response`: "approved"/"denied" (for confirmations)
-
-### Bridge management
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge start    # Start bot (usually auto-started by hook)
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge stop     # Stop bot
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge status   # Check if running
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge logs     # Tail bridge logs
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge history   # Show last 20 history entries
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge history 50  # Show last 50 entries
-```
-
-## When to Notify
-
-Send Slack notifications when:
-- A long-running task completes or fails
-- You need user confirmation for a destructive or important action
-- You have a question and the user hasn't responded in the terminal
-- A significant milestone is reached in multi-step work
-
-## Proactive Updates on Session Resume
-
-When a session resumes from a context summary (i.e., the conversation starts with a summary of a previous session that ran out of context), and the summary indicates pending/in-progress work that the user was waiting on:
-
-1. Complete the carried-over work as described in the summary
-2. **Immediately send a completion update to Slack** via `coco-bridge send` — do NOT wait for the user to ask "what happened?"
-3. The trigger is the Pending Tasks / Current Work sections in the session summary
-
-This prevents the gap where the previous session acked work ("On it...") but ran out of context before delivering results, leaving the user waiting with no update.
-
-## When to Use Confirmations
-
-Use `confirm` (Approve/Deny buttons) for:
-- Destructive operations (DROP, DELETE, overwrite)
-- Deploying to production
-- Making irreversible changes
-- Any action where the user explicitly asked to be consulted remotely
-
-## Tool Confirmations via Slack
-
-**When Slack is enabled and the agent needs user confirmation for a tool action** (e.g., SQL execution, file changes, destructive operations), send the confirmation to Slack with Approve/Deny buttons so the user can respond from their phone:
+## Commands (wrapper quick reference)
 
 ```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge confirm "Run DROP TABLE staging.temp_data?" --id drop-temp-data
+BRIDGE=~/Apps/coco-slack-bridge/bin/coco-bridge
+
+$BRIDGE send "Task done"               # plain DM
+$BRIDGE send "Done" --type success     # color-coded
+$BRIDGE confirm "Deploy?" --id deploy-1  # Approve/Deny buttons
+$BRIDGE inbox                          # current inbox JSON
+$BRIDGE history 50                     # last 50 audit events
+$BRIDGE project list                   # list registered projects
+$BRIDGE project use <name>             # set active project
+$BRIDGE task add high "Title" "Desc"   # local mirror of /task add
+$BRIDGE set-poll-interval 5            # adjust polling cadence
 ```
 
-This lets the user work "offline" — the agent sends the confirmation, waits for the button click, and continues based on the response. The user doesn't need to be at the terminal.
+## When to Notify / Confirm / Ask via Slack
 
-Use this pattern whenever the agent would normally pause and ask the user in the CLI. With Slack on, route that question to Slack instead so the session isn't blocked waiting for terminal input.
-
-## Questions via Slack
-
-**When Slack is enabled, do NOT use `ask_user_question` for questions.** That tool renders interactive UI in the CLI which requires the user to be at the terminal. Instead, send the question as a plain text Slack message:
-
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge send "Which approach? (1) Simple cron polling (2) Background watcher (3) WebSocket — reply with 1, 2, or 3"
-```
-
-The user replies as a free-text DM, which arrives in the inbox on the next cron cycle. Format questions clearly with numbered options so the user can reply briefly from their phone.
+- Long-running task completes or fails -> `coco-bridge send` with `--type success|error`.
+- Destructive operation (DROP, DELETE, prod deploy) -> `coco-bridge confirm`.
+- Blocking question when user isn't at terminal -> `coco-bridge send` plain-text with numbered options.
+- Don't use `ask_user_question` while Slack is active — it blocks on the CLI.
 
 ## Responding to Slack Messages
 
-When processing a message that came FROM Slack (via the inbox watcher), **always send your response back to Slack** in addition to displaying it in the CLI. After generating your response, run:
+Whenever you process a `reply` or `command` entry from the inbox, *always* send a concise response back via `coco-bridge send`. The user is on their phone — 2-3 sentences max, with full detail in the CLI.
 
-```bash
-~/Apps/cortex-code-cli-slack-bridge/bin/coco-bridge send "Your response text here"
-```
+## Proactive Updates on Session Resume
 
-Keep Slack responses concise — summarize in 2-3 sentences max. The user is reading on their phone. If the response involves code or long output, send a brief summary to Slack and note that full details are in the CLI session.
+When a session resumes from a context summary and the summary indicates pending work the user was waiting on: finish the work, then immediately `coco-bridge send` the result. Don't wait to be asked.
 
-## Inbox Format
+## Inbox Format (reference)
 
 ```json
 [
@@ -204,19 +183,25 @@ Keep Slack responses concise — summarize in 2-3 sentences max. The user is rea
     "text": "user's message",
     "user": "U02M8RTD1HT",
     "ts": "1234567890.123456",
-    "received_at": 1234567890.123
+    "received_at": 1234567890.123,
+    "project": {"name": "slack_v1", "path": "/abs/path"}
+  },
+  {
+    "type": "command",
+    "command": "snowboard.create_task",
+    "args": {"title": "...", "description": "...", "priority": "high"},
+    "user": "U...",
+    "ts": "...",
+    "received_at": 1234567890.0,
+    "project": {"name": "slack_v1", "path": "/abs/path"}
   },
   {
     "type": "confirmation",
     "confirmation_id": "deploy-123",
     "response": "approved",
-    "user": "U02M8RTD1HT",
-    "received_at": 1234567890.123
+    "user": "U...",
+    "received_at": 1234567890.0,
+    "project": {"name": "slack_v1", "path": "/abs/path"}
   }
 ]
-```
-
-After processing inbox entries, clear the file:
-```bash
-echo '[]' > ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json
 ```

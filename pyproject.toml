@@ -11,3 +11,6 @@ dependencies = [
 [project.scripts]
 coco-notify = "cortex_slack_bridge.notify:main"
 coco-bridge = "cortex_slack_bridge.bridge:main"
+
+[tool.setuptools]
+packages = ["cortex_slack_bridge"]

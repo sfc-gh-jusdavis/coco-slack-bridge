@@ -161,7 +161,22 @@ def get_session_inbox(session_id: str | None = None) -> Path:
 
 
 def get_active_session() -> str:
-    """Return the most recently active session ID."""
+    """Return the most recently active session ID.
+
+    Prefers the active project's most-recently-used session (from the
+    project registry). Falls back to the legacy ACTIVE_SESSION_FILE,
+    then to 'default'.
+    """
+    # Lazy import to avoid circular dependency (projects imports from config)
+    try:
+        from cortex_slack_bridge import projects as _projects
+
+        sid = _projects.active_session_for_project()
+        if sid:
+            return sid
+    except Exception:
+        pass
+
     if ACTIVE_SESSION_FILE.exists():
         try:
             return ACTIVE_SESSION_FILE.read_text().strip()
@@ -174,3 +189,55 @@ def set_active_session(session_id: str):
     """Mark a session as the most recently active."""
     ensure_dirs()
     ACTIVE_SESSION_FILE.write_text(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Bridge configuration (poll interval, wake signal)
+# ---------------------------------------------------------------------------
+
+DEFAULT_POLL_INTERVAL = 5  # seconds between in-prompt inbox reads
+MIN_POLL_INTERVAL = 2
+MAX_POLL_INTERVAL = 30
+
+
+def get_poll_interval() -> int:
+    """Return the configured inbox-poll interval in seconds.
+
+    Priority: env var > config.json > default. Clamped to [MIN, MAX].
+    """
+    raw = os.environ.get("COCO_BRIDGE_POLL_INTERVAL")
+    if raw is None:
+        raw = _load_file_config().get("poll_interval_seconds")
+    try:
+        val = int(raw) if raw is not None else DEFAULT_POLL_INTERVAL
+    except (TypeError, ValueError):
+        val = DEFAULT_POLL_INTERVAL
+    return max(MIN_POLL_INTERVAL, min(MAX_POLL_INTERVAL, val))
+
+
+def set_poll_interval(seconds: int) -> int:
+    """Persist the poll interval in ~/.cortex-slack-bridge/config.json."""
+    seconds = max(MIN_POLL_INTERVAL, min(MAX_POLL_INTERVAL, int(seconds)))
+    ensure_dirs()
+    cfg = _load_file_config()
+    cfg["poll_interval_seconds"] = seconds
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    tmp.replace(CONFIG_FILE)
+    return seconds
+
+
+def get_wake_enabled() -> bool:
+    raw = os.environ.get("COCO_BRIDGE_WAKE_ENABLED")
+    if raw is None:
+        raw = _load_file_config().get("poll_wake_enabled")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
+def wake_file_for(session_id: str) -> Path:
+    return BRIDGE_DIR / f"wake_{session_id or 'default'}"

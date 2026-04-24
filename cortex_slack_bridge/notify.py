@@ -30,6 +30,7 @@ from cortex_slack_bridge.config import (
     get_user_id,
     set_active_session,
 )
+from cortex_slack_bridge import projects as _projects
 
 # ---------------------------------------------------------------------------
 # Inbox reader (for polling confirmation responses)
@@ -138,10 +139,25 @@ def send_message(
     user_id = get_user_id()
     channel = _open_dm(client, user_id)
 
-    # Tag message with session ID so the bridge can route replies back
+    # Auto-register this session under the current project, so free-text DMs
+    # from Slack route back to us.
+    try:
+        _projects.auto_register_cwd(session_id=sid)
+    except Exception:
+        pass  # registry is a convenience, never fail the notify
+
+    project_info = _projects.get_active_project() or {}
+
+    # Tag message with session ID + project so the bridge can route replies back
     metadata = {
         "event_type": "cortex_bridge",
-        "event_payload": {"session_id": sid},
+        "event_payload": {
+            "session_id": sid,
+            "project": {
+                "name": project_info.get("name"),
+                "path": project_info.get("path"),
+            },
+        },
     }
 
     # Color-coded attachment mode

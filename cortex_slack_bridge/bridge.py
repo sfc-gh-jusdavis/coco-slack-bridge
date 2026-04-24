@@ -27,7 +27,10 @@ from cortex_slack_bridge.config import (
     get_bot_token,
     get_session_inbox,
     get_user_id,
+    get_wake_enabled,
+    wake_file_for,
 )
+from cortex_slack_bridge import commands, projects
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -81,6 +84,20 @@ def _append_inbox(entry: dict, session_id: str | None = None):
     tmp.replace(inbox)
     log.info("Wrote inbox entry: %s -> session %s", entry.get("type", "unknown"), sid)
     _log_history(entry, "inbound")
+    # Optional wake-signal — lets the skill short-circuit its sleep loop.
+    if get_wake_enabled():
+        try:
+            wake_file_for(sid).touch()
+        except OSError as exc:
+            log.warning("Failed to touch wake file for %s: %s", sid, exc)
+
+
+def _project_context() -> dict:
+    """Return {'name':..., 'path':...} for the active project (or empty)."""
+    active = projects.get_active_project()
+    if not active:
+        return {}
+    return {"name": active.get("name"), "path": active.get("path")}
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +112,7 @@ def create_app() -> App:
     # --- DM listener -----------------------------------------------------------
     @app.event("message")
     def handle_dm(event, say):
-        """Capture DMs from the target user and write to inbox."""
+        """Capture DMs from the target user and dispatch commands or inbox-forward."""
         # Only process messages from our user (ignore bot's own messages)
         user = event.get("user")
         subtype = event.get("subtype")
@@ -105,15 +122,42 @@ def create_app() -> App:
         text = event.get("text", "")
         log.info("DM received from %s: %s", user, text[:80])
 
-        _append_inbox({
-            "type": "reply",
-            "text": text,
-            "user": user,
-            "ts": event.get("ts", ""),
-            "received_at": time.time(),
-        })
+        parsed = commands.parse(text)
+        if parsed is None:
+            # Free text -> forward to active session inbox as a reply
+            _append_inbox({
+                "type": "reply",
+                "text": text,
+                "user": user,
+                "ts": event.get("ts", ""),
+                "received_at": time.time(),
+                "project": _project_context(),
+            })
+            say("Message sent to CoCo CLI. Awaiting response... :hourglass_flowing_sand:")
+            return
 
-        say("Message sent to CoCo CLI. Awaiting response... please wait :dash_board:")
+        kind = parsed.get("kind")
+        if kind == "error":
+            say(f":warning: {parsed.get('message', 'Invalid command')}")
+            return
+        if kind == "inline":
+            _handle_inline(parsed, say)
+            return
+        if kind == "command":
+            _append_inbox({
+                "type": "command",
+                "command": parsed["command"],
+                "args": parsed.get("args", {}),
+                "user": user,
+                "ts": event.get("ts", ""),
+                "received_at": time.time(),
+                "project": _project_context(),
+            })
+            say(
+                f":inbox_tray: Queued `{parsed['command']}` for project "
+                f"*{_project_context().get('name') or 'default'}*. Agent will respond when it picks it up."
+            )
+            return
 
     # --- Button action handlers ------------------------------------------------
     @app.action("confirm_approve")
@@ -131,6 +175,7 @@ def create_app() -> App:
             "response": "approved",
             "user": user,
             "received_at": time.time(),
+            "project": _project_context(),
         }, session_id=session_id)
 
         # Update the original message to show the result
@@ -151,11 +196,41 @@ def create_app() -> App:
             "response": "denied",
             "user": user,
             "received_at": time.time(),
+            "project": _project_context(),
         }, session_id=session_id)
 
         _update_confirmation_message(client, body, "Denied ✗")
 
     return app
+
+
+def _handle_inline(parsed: dict, say):
+    """Answer simple commands directly from the bridge, no agent roundtrip."""
+    op = parsed.get("op")
+    if op == "help":
+        say(commands.HELP_TEXT)
+        return
+    if op == "projects":
+        entries = projects.list_projects()
+        if not entries:
+            say(":open_file_folder: No projects registered yet. Start a CoCo session and it will auto-register.")
+            return
+        lines = ["*Projects* (sessions in parens)"]
+        for p in entries:
+            marker = " *(active)*" if p["active"] else ""
+            sess = f" [{len(p['sessions'])} sess]" if p["sessions"] else ""
+            lines.append(f"- `{p['name']}`{marker}{sess} — `{p['path']}`")
+        say("\n".join(lines))
+        return
+    if op == "use":
+        name = parsed["args"]["name"]
+        if projects.set_active_project(name):
+            active = projects.get_active_project() or {}
+            say(f":white_check_mark: Active project set to `{name}` (`{active.get('path', '?')}`)")
+        else:
+            say(f":warning: No project named `{name}`. Use /projects to list.")
+        return
+    say(f":warning: Unhandled inline op `{op}`")
 
 
 def _extract_confirmation_id(body: dict) -> str:

@@ -205,6 +205,126 @@ cmd_clear_keychain() {
     echo "Done."
 }
 
+cmd_project() {
+    local op="${1:-list}"
+    shift || true
+    case "$op" in
+        list)
+            "$PYTHON" -c "
+from cortex_slack_bridge import projects
+import json
+entries = projects.list_projects()
+if not entries:
+    print('(no projects registered)')
+else:
+    for p in entries:
+        marker = ' *' if p['active'] else '  '
+        print(f\"{marker} {p['name']:<20} {p['path']}  sessions={len(p['sessions'])}\")
+"
+            ;;
+        register)
+            local name="${1:-}"; local path="${2:-$PWD}"
+            if [[ -z "$name" ]]; then
+                echo "Usage: coco-bridge project register <name> [path]" >&2
+                return 1
+            fi
+            "$PYTHON" -c "
+from cortex_slack_bridge import projects
+n = projects.register_project('$path', name='$name', session_id='$SESSION_ID')
+print(f'Registered: {n}')
+"
+            ;;
+        use)
+            local name="${1:-}"
+            if [[ -z "$name" ]]; then
+                echo "Usage: coco-bridge project use <name>" >&2
+                return 1
+            fi
+            "$PYTHON" -c "
+from cortex_slack_bridge import projects
+ok = projects.set_active_project('$name')
+print('Active project set to $name' if ok else 'No such project: $name')
+" ;;
+        remove)
+            local name="${1:-}"
+            if [[ -z "$name" ]]; then
+                echo "Usage: coco-bridge project remove <name>" >&2
+                return 1
+            fi
+            "$PYTHON" -c "
+from cortex_slack_bridge import projects
+ok = projects.remove_project('$name')
+print('Removed $name' if ok else 'No such project: $name')
+" ;;
+        *)
+            echo "Usage: coco-bridge project {list|register <name> [path]|use <name>|remove <name>}" >&2
+            return 1
+            ;;
+    esac
+}
+
+cmd_task() {
+    local op="${1:-list}"
+    shift || true
+    case "$op" in
+        add)
+            local priority="medium"
+            if [[ "${1:-}" =~ ^(urgent|high|medium|low|none)$ ]]; then
+                priority="$1"; shift
+            fi
+            local title="${1:-}"
+            local desc="${2:-$title}"
+            if [[ -z "$title" ]]; then
+                echo 'Usage: coco-bridge task add [priority] "title" ["description"]' >&2
+                return 1
+            fi
+            # Local task add writes a command entry to the active session's inbox,
+            # same as Slack would — the skill picks it up and calls SnowBoard.
+            "$PYTHON" -c "
+import json, time
+from cortex_slack_bridge import projects, config
+from cortex_slack_bridge.bridge import _append_inbox
+project = projects.get_active_project() or {}
+_append_inbox({
+    'type': 'command',
+    'command': 'snowboard.create_task',
+    'args': {'title': '''$title''', 'description': '''$desc''', 'priority': '$priority'},
+    'user': 'local-cli',
+    'received_at': time.time(),
+    'project': {'name': project.get('name'), 'path': project.get('path')},
+})
+print('Queued task in active session inbox.')
+"
+            ;;
+        list|status)
+            echo "coco-bridge task $op is a mirror of Slack's /task $op — send it from Slack or use the skill directly." >&2
+            return 1 ;;
+        *)
+            echo 'Usage: coco-bridge task add [priority] "title" ["desc"]' >&2
+            return 1 ;;
+    esac
+}
+
+cmd_set_poll_interval() {
+    local secs="${1:-}"
+    if [[ -z "$secs" ]]; then
+        "$PYTHON" -c "from cortex_slack_bridge.config import get_poll_interval; print(get_poll_interval())"
+        return 0
+    fi
+    "$PYTHON" -c "
+from cortex_slack_bridge.config import set_poll_interval
+print(set_poll_interval($secs))
+"
+}
+
+cmd_wake() {
+    # Manually create a wake-file to break the skill's sleep loop early.
+    # Useful when testing or when the bridge is external.
+    local wake_file="$BRIDGE_DIR/wake_${SESSION_ID}"
+    touch "$wake_file"
+    echo "Touched $wake_file"
+}
+
 # --- Main dispatch ---------------------------------------------------------
 case "${1:-help}" in
     start)   cmd_start ;;
@@ -217,6 +337,10 @@ case "${1:-help}" in
     history) shift; cmd_history "$@" ;;
     setup-keychain) cmd_setup_keychain ;;
     clear-keychain) cmd_clear_keychain ;;
+    project) shift; cmd_project "$@" ;;
+    task)    shift; cmd_task "$@" ;;
+    set-poll-interval) shift; cmd_set_poll_interval "$@" ;;
+    wake)    cmd_wake ;;
     help|*)
         echo "coco-bridge — Cortex Code Slack Bridge"
         echo ""
@@ -229,7 +353,11 @@ case "${1:-help}" in
         echo "  logs               Tail the bridge log"
         echo "  inbox              Show current inbox contents"
         echo "  history [N]        Show last N history entries (default: 20)"
-        echo "  setup-keychain     Store tokens in macOS Keychain (migrate from config.json)"
+        echo "  setup-keychain     Store tokens in macOS Keychain"
         echo "  clear-keychain     Remove tokens from macOS Keychain"
+        echo "  project list|register <name> [path]|use <name>|remove <name>"
+        echo "  task add [priority] \"title\" [\"desc\"]   Queue a SnowBoard create-task command"
+        echo "  set-poll-interval [seconds]              Read/set inbox poll cadence (2-30)"
+        echo "  wake               Touch the wake-file for the current session"
         ;;
 esac
