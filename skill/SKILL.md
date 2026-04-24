@@ -16,8 +16,17 @@ Use these paths (the bridge is installed at `~/Apps/coco-slack-bridge`):
 
 ```
 BRIDGE=~/Apps/coco-slack-bridge/bin/coco-bridge
-INBOX=~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json
-WAKE=~/.cortex-slack-bridge/wake_${CORTEX_SESSION_ID}
+# Resolve session ID (Desktop sets CORTEX_SESSION_ID; CLI uses a project-specific file)
+PROJECT_NAME=$(basename "$PWD")
+if [ -n "${CORTEX_SESSION_ID:-}" ]; then
+  SID="$CORTEX_SESSION_ID"
+elif [ -f "$HOME/.cortex-slack-bridge/session_${PROJECT_NAME}.id" ]; then
+  SID=$(cat "$HOME/.cortex-slack-bridge/session_${PROJECT_NAME}.id")
+else
+  SID="default"
+fi
+INBOX=~/.cortex-slack-bridge/inbox_${SID}.json
+WAKE=~/.cortex-slack-bridge/wake_${SID}
 ```
 
 ## SessionStart Prompt
@@ -43,8 +52,16 @@ If "Yes", register the project and run the Enable flow. If "No", do nothing.
 cron_create with cron "*/1 * * * *" and prompt:
 "Slack inbox fast check: You MUST run the following bash loop FIRST. The loop polls the inbox every 5 seconds for up to 55 seconds within this 1-minute cron fire. As soon as entries appear, process them and exit the loop early.
 
-INBOX=~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json
-WAKE=~/.cortex-slack-bridge/wake_${CORTEX_SESSION_ID}
+PROJECT_NAME=$(basename "$PWD")
+if [ -n "${CORTEX_SESSION_ID:-}" ]; then
+  SID="$CORTEX_SESSION_ID"
+elif [ -f "$HOME/.cortex-slack-bridge/session_${PROJECT_NAME}.id" ]; then
+  SID=$(cat "$HOME/.cortex-slack-bridge/session_${PROJECT_NAME}.id")
+else
+  SID="default"
+fi
+INBOX=~/.cortex-slack-bridge/inbox_${SID}.json
+WAKE=~/.cortex-slack-bridge/wake_${SID}
 for i in $(seq 1 11); do
   if [ -f \"$INBOX\" ]; then
     content=$(cat \"$INBOX\")
@@ -119,7 +136,7 @@ When the user says "pause", "brb", etc.:
 2. Create a slow heartbeat cron:
 ```
 cron_create with cron "*/5 * * * *" and prompt:
-"Slack pause heartbeat: cat ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json. If [] or missing, silent. If entries, look for resume keywords (resume, back, unpause, I'm back). If found, delete this heartbeat, recreate the fast inbox cron from the slack-bridge skill, send 'Slack bridge resumed', then process queued messages. Else leave entries queued, silent."
+"Slack pause heartbeat: resolve SID the same way as the fast check (CORTEX_SESSION_ID, else session_${PROJECT_NAME}.id, else default). cat ~/.cortex-slack-bridge/inbox_${SID}.json. If [] or missing, silent. If entries, look for resume keywords (resume, back, unpause, I'm back). If found, delete this heartbeat, recreate the fast inbox cron from the slack-bridge skill, send 'Slack bridge resumed', then process queued messages. Else leave entries queued, silent."
 ```
 3. `coco-bridge send "Slack bridge paused. Say 'resume' to continue."`
 
@@ -132,7 +149,7 @@ cron_create with cron "*/5 * * * *" and prompt:
 ## Disabling Slack
 
 1. Delete the inbox-check cron.
-2. `echo '[]' > ~/.cortex-slack-bridge/inbox_${CORTEX_SESSION_ID}.json`
+2. Resolve SID (same pattern as the cron), then: `echo '[]' > ~/.cortex-slack-bridge/inbox_${SID}.json`
 3. `coco-bridge send "Slack bridge off"`
 
 ## Polling latency

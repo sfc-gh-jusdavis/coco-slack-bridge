@@ -241,3 +241,39 @@ def get_wake_enabled() -> bool:
 
 def wake_file_for(session_id: str) -> Path:
     return BRIDGE_DIR / f"wake_{session_id or 'default'}"
+
+
+# ---------------------------------------------------------------------------
+# Thread context — track the latest thread_ts per session so replies thread
+# ---------------------------------------------------------------------------
+
+def _thread_file_for(session_id: str | None = None) -> Path:
+    sid = session_id or get_session_id()
+    return BRIDGE_DIR / f"thread_{sid}"
+
+
+def get_thread_ts(session_id: str | None = None) -> str | None:
+    """Return the current thread_ts for the session, or None."""
+    tf = _thread_file_for(session_id)
+    if tf.exists():
+        try:
+            return tf.read_text().strip() or None
+        except OSError:
+            pass
+    return None
+
+
+def set_thread_ts(ts: str, session_id: str | None = None):
+    """Persist the thread_ts for the session."""
+    ensure_dirs()
+    _thread_file_for(session_id).write_text(ts)
+
+
+def clear_thread_ts(session_id: str | None = None):
+    """Remove the thread context for the session."""
+    tf = _thread_file_for(session_id)
+    if tf.exists():
+        try:
+            tf.unlink()
+        except OSError:
+            pass

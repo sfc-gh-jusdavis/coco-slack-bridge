@@ -6,8 +6,24 @@
 set -euo pipefail
 
 BRIDGE="$HOME/Apps/coco-slack-bridge/bin/coco-bridge"
-SESSION_ID="${CORTEX_SESSION_ID:-default}"
+BRIDGE_DIR="$HOME/.cortex-slack-bridge"
 PROJECT_NAME="$(basename "$PWD")"
+
+# Resolve session ID.
+# CoCo Desktop sets CORTEX_SESSION_ID. CoCo CLI may not — generate a stable
+# UUID for this process group and persist it so the skill can reference it.
+if [[ -n "${CORTEX_SESSION_ID:-}" ]]; then
+    SESSION_ID="$CORTEX_SESSION_ID"
+else
+    SESSION_FILE="$BRIDGE_DIR/session_${PROJECT_NAME}.id"
+    mkdir -p "$BRIDGE_DIR"
+    if [[ ! -f "$SESSION_FILE" ]]; then
+        uuidgen | tr '[:upper:]' '[:lower:]' > "$SESSION_FILE"
+    fi
+    SESSION_ID="$(<"$SESSION_FILE")"
+    # Export so child processes (notify.py etc.) also see it
+    export CORTEX_SESSION_ID="$SESSION_ID"
+fi
 
 # Make sure the sidecar is running (idempotent).
 "$BRIDGE" status 2>/dev/null | grep -q running || "$BRIDGE" start >/dev/null 2>&1 || true

@@ -28,6 +28,7 @@ from cortex_slack_bridge.config import (
     get_session_inbox,
     get_user_id,
     get_wake_enabled,
+    set_thread_ts,
     wake_file_for,
 )
 from cortex_slack_bridge import commands, projects
@@ -100,6 +101,20 @@ def _project_context() -> dict:
     return {"name": active.get("name"), "path": active.get("path")}
 
 
+def _inbox_age_str(inbox_path: Path) -> str:
+    """Return a human-readable age string for an inbox file, with activity indicator."""
+    if not inbox_path.exists():
+        return ":black_circle: never written"
+    age_secs = time.time() - inbox_path.stat().st_mtime
+    if age_secs < 120:
+        return f":large_green_circle: active ({int(age_secs)}s ago)"
+    if age_secs < 600:
+        return f":large_yellow_circle: {int(age_secs // 60)}m ago"
+    if age_secs < 3600:
+        return f":white_circle: {int(age_secs // 60)}m ago"
+    return f":black_circle: {int(age_secs // 3600)}h ago"
+
+
 # ---------------------------------------------------------------------------
 # Slack App setup
 # ---------------------------------------------------------------------------
@@ -125,15 +140,27 @@ def create_app() -> App:
         parsed = commands.parse(text)
         if parsed is None:
             # Free text -> forward to active session inbox as a reply
+            sid = get_active_session()
+            user_ts = event.get("ts", "")
             _append_inbox({
                 "type": "reply",
                 "text": text,
                 "user": user,
-                "ts": event.get("ts", ""),
+                "ts": user_ts,
                 "received_at": time.time(),
                 "project": _project_context(),
             })
-            say("Message sent to CoCo CLI. Awaiting response... :hourglass_flowing_sand:")
+            # Reply in-thread under the user's DM so the conversation stays
+            # grouped.  Save this ts so the agent's response also threads here.
+            if user_ts:
+                say(
+                    "Message sent to CoCo CLI. Awaiting response... :hourglass_flowing_sand:",
+                    thread_ts=user_ts,
+                )
+                set_thread_ts(user_ts, session_id=sid)
+                log.info("Thread context saved: ts=%s session=%s", user_ts, sid)
+            else:
+                say("Message sent to CoCo CLI. Awaiting response... :hourglass_flowing_sand:")
             return
 
         kind = parsed.get("kind")
@@ -210,16 +237,40 @@ def _handle_inline(parsed: dict, say):
     if op == "help":
         say(commands.HELP_TEXT)
         return
+    if op == "status":
+        active_proj = projects.get_active_project() or {}
+        proj_name = active_proj.get("name") or "none"
+        proj_path = active_proj.get("path") or "—"
+        from cortex_slack_bridge.config import get_active_session, get_poll_interval
+        sid = get_active_session()
+        inbox = get_session_inbox(sid)
+        age = _inbox_age_str(inbox)
+        poll = get_poll_interval()
+        lines = [
+            "*Bridge status*",
+            f":file_folder: Active project: `{proj_name}`  `{proj_path}`",
+            f":id: Active session: `{sid}`",
+            f":inbox_tray: Inbox: {age}",
+            f":timer_clock: Poll interval: {poll}s",
+        ]
+        say("\n".join(lines))
+        return
     if op == "projects":
         entries = projects.list_projects()
         if not entries:
             say(":open_file_folder: No projects registered yet. Start a CoCo session and it will auto-register.")
             return
-        lines = ["*Projects* (sessions in parens)"]
+        lines = ["*Projects & sessions*"]
         for p in entries:
-            marker = " *(active)*" if p["active"] else ""
-            sess = f" [{len(p['sessions'])} sess]" if p["sessions"] else ""
-            lines.append(f"- `{p['name']}`{marker}{sess} — `{p['path']}`")
+            marker = " *(routed here)*" if p["active"] else ""
+            lines.append(f"\n:file_folder: *{p['name']}*{marker}  `{p['path']}`")
+            if p["sessions"]:
+                for sid in p["sessions"]:
+                    inbox = get_session_inbox(sid)
+                    age = _inbox_age_str(inbox)
+                    lines.append(f"  • `{sid[:12]}…`  {age}")
+            else:
+                lines.append("  _no sessions registered_")
         say("\n".join(lines))
         return
     if op == "use":

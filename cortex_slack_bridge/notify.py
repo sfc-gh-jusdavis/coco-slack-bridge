@@ -27,8 +27,10 @@ from cortex_slack_bridge.config import (
     get_bot_token,
     get_session_id,
     get_session_inbox,
+    get_thread_ts,
     get_user_id,
     set_active_session,
+    set_thread_ts,
 )
 from cortex_slack_bridge import projects as _projects
 
@@ -121,6 +123,7 @@ def send_message(
     blocks: list | None = None,
     msg_type: str | None = None,
     session_id: str | None = None,
+    thread_ts: str | None = None,
 ) -> dict:
     """Send a DM notification to the configured Slack user.
 
@@ -131,6 +134,8 @@ def send_message(
             When set, the message is sent as a color-coded attachment.
             Ignored if blocks is provided.
         session_id: Cortex Code session ID for routing.
+        thread_ts: Slack thread timestamp to reply in-thread. If "auto",
+            uses the stored thread context for this session.
 
     Returns the Slack API response dict.
     """
@@ -138,6 +143,14 @@ def send_message(
     client = WebClient(token=get_bot_token())
     user_id = get_user_id()
     channel = _open_dm(client, user_id)
+
+    # Resolve thread context
+    if thread_ts == "auto":
+        thread_ts = get_thread_ts(sid)
+    # Build optional thread kwargs
+    thread_kwargs = {}
+    if thread_ts:
+        thread_kwargs["thread_ts"] = thread_ts
 
     # Auto-register this session under the current project, so free-text DMs
     # from Slack route back to us.
@@ -178,6 +191,7 @@ def send_message(
                 text=f"{icon} {text}",  # fallback for push notifications only
                 blocks=blocks,
                 metadata=metadata,
+                **thread_kwargs,
             )
             set_active_session(sid)
             _log_history({"type": "notification", "text": text, "msg_type": msg_type, "session_id": sid}, "outbound")
@@ -197,7 +211,8 @@ def send_message(
 
     try:
         resp = client.chat_postMessage(
-            channel=channel, text=text, blocks=blocks, metadata=metadata
+            channel=channel, text=text, blocks=blocks, metadata=metadata,
+            **thread_kwargs,
         )
         set_active_session(sid)
         _log_history({"type": "notification", "text": text, "session_id": sid}, "outbound")
@@ -312,6 +327,15 @@ def main():
         default=None,
         help="Message type for color-coded attachments (blue/green/yellow/red)",
     )
+    parser.add_argument(
+        "--thread",
+        dest="thread_ts",
+        default=None,
+        const="auto",
+        nargs="?",
+        help="Reply in-thread. Pass a ts value, or omit the value to use "
+             "the stored thread context for this session (--thread=auto)",
+    )
 
     args = parser.parse_args()
 
@@ -332,7 +356,8 @@ def main():
             sys.exit(1)
     else:
         send_message(
-            args.message, msg_type=args.msg_type, session_id=args.session
+            args.message, msg_type=args.msg_type, session_id=args.session,
+            thread_ts=args.thread_ts,
         )
         print("sent")
 

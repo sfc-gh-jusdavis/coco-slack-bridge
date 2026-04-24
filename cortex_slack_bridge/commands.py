@@ -1,7 +1,7 @@
 """Slack DM command parser for the Cortex Code Slack Bridge.
 
-Parses slash-prefixed DMs (e.g. `/task add high Title :: Desc`) into
-structured dicts that the bridge can write to the inbox or answer inline.
+Commands are prefixed with `!` (e.g. `!task add high Title :: Desc`) to avoid
+conflicts with Slack's global slash command interception.
 
 All parsing is string-only and zero-dep to keep the sidecar lean.
 """
@@ -14,8 +14,13 @@ VALID_PRIORITIES = {"urgent", "high", "medium", "low", "none"}
 VALID_STATUSES = {"backlog", "in_progress", "need_approval", "review", "done"}
 
 
+COMMAND_PREFIX = "!"
+
+
 def parse(text: str) -> dict[str, Any] | None:
     """Parse a command string. Returns None if `text` is not a command.
+
+    Commands start with `!` to avoid Slack's slash command interception.
 
     Returns a dict like:
         {"kind": "inline", "op": "projects"}                        # bot answers directly
@@ -24,14 +29,14 @@ def parse(text: str) -> dict[str, Any] | None:
         {"kind": "command", "command": "snowboard.create_task", "args": {...}}
         {"kind": "error", "message": "..."}
     """
-    if not text or not text.strip().startswith("/"):
+    if not text or not text.strip().startswith(COMMAND_PREFIX):
         return None
     raw = text.strip()
     # Normalize smart quotes so phones don't break us
     raw = raw.replace("\u2018", "'").replace("\u2019", "'")
     raw = raw.replace("\u201c", '"').replace("\u201d", '"')
     head, _, rest = raw.partition(" ")
-    head = head.lower().lstrip("/")
+    head = head.lower().lstrip(COMMAND_PREFIX)
     rest = rest.strip()
 
     if head in {"help", "?"}:
@@ -39,6 +44,9 @@ def parse(text: str) -> dict[str, Any] | None:
 
     if head == "projects":
         return {"kind": "inline", "op": "projects"}
+
+    if head in {"status", "session"}:
+        return {"kind": "inline", "op": "status"}
 
     if head == "use":
         if not rest:
@@ -51,7 +59,7 @@ def parse(text: str) -> dict[str, Any] | None:
     if head == "task":
         return _parse_task(rest)
 
-    return {"kind": "error", "message": f"Unknown command `/{head}`. Try /help."}
+    return {"kind": "error", "message": f"Unknown command `!{head}`. Try `!help`."}
 
 
 def _parse_new(rest: str) -> dict[str, Any]:
@@ -165,14 +173,15 @@ def _parse_task_status(tail: str) -> dict[str, Any]:
 
 
 HELP_TEXT = (
-    "*Slack Bridge commands*\n"
-    "`/help` — this help\n"
-    "`/projects` — list registered projects\n"
-    "`/use <name>` — switch the active project (routes free-text DMs)\n"
-    "`/new <name> [prompt]` — ask the agent to start a new CoCo CLI session\n"
-    "`/task add [priority] <title> :: <description>` — create SnowBoard task "
+    "*CoCo Bridge commands* (prefix: `!`)\n"
+    "`!help` — this help\n"
+    "`!status` — active project, session, inbox age, poll interval\n"
+    "`!projects` — list all registered projects and session activity\n"
+    "`!use <name>` — switch the active project (routes free-text DMs)\n"
+    "`!new <name> [prompt]` — ask the agent to start a new CoCo CLI session\n"
+    "`!task add [priority] <title> :: <description>` — create SnowBoard task "
     "(priority: urgent|high|medium|low|none, default medium)\n"
-    "`/task list [status]` — list tasks (status: backlog|in_progress|need_approval|review|done)\n"
-    "`/task status <id> <status>` — update a task status\n"
-    "Free text (no leading `/`) is forwarded to the active CoCo session as a reply."
+    "`!task list [status]` — list tasks (status: backlog|in_progress|need_approval|review|done)\n"
+    "`!task status <id> <status>` — update a task status\n"
+    "Free text (no leading `!`) is forwarded to the active CoCo session as a reply."
 )
