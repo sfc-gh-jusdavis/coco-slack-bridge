@@ -380,14 +380,16 @@ def _handle_inline(parsed: dict, say, event: dict = None, client=None):
         if mode == "headless":
             headless = sessions.list_sessions()
             lines.append(f":zap: Headless sessions: {len(headless)}")
-            for h in headless[:5]:
-                ts_short = h["thread_ts"][:12] + "…"
+            for i, h in enumerate(headless[:5], 1):
                 age = int(time.time() - h.get("last_active", 0))
-                age_str = f"{age}s" if age < 60 else f"{age // 60}m"
-                lines.append(
-                    f"  • `{ts_short}` → `{h['session_id'][:12]}…` "
-                    f"project=`{h.get('project_name') or '?'}` active {age_str} ago"
-                )
+                if age < 60:
+                    age_str = f"{age}s ago"
+                elif age < 3600:
+                    age_str = f"{age // 60}m ago"
+                else:
+                    age_str = f"{age // 3600}h ago"
+                proj = h.get("project_name") or "?"
+                lines.append(f"  *#{i}*  `{proj}` — active {age_str}")
         else:
             sid = get_active_session()
             inbox = get_session_inbox(sid)
