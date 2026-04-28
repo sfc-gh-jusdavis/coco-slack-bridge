@@ -139,9 +139,9 @@ All commands use the `!` prefix.
 | `!sessions` | Detailed headless session list |
 | `!threads` | Thread-to-session mappings |
 | `!new <project> [prompt]` | Start a new headless session in a project |
-| `!open [project]` | Open interactive Terminal.app (in a thread: resumes that session) |
+| `!open [#N\|name]` | Open interactive Terminal (in a thread: resumes that session) |
 | `!use <name>` | Switch the active project for routing |
-| `!kill <thread_ts>` | Remove a thread-session mapping |
+| `!kill [#N]` | Remove a session (or reply `!kill` in a thread) |
 | `!mode [headless\|terminal]` | Show or switch bridge mode |
 | `!task add [priority] <title> :: <desc>` | Create a SnowBoard task |
 | `!task list [status]` | List tasks |

@@ -453,7 +453,7 @@ def _handle_inline(parsed: dict, say, event: dict = None, client=None):
         _handle_sessions(say)
         return
     if op == "kill":
-        _handle_kill(parsed.get("args", {}), say)
+        _handle_kill(parsed.get("args", {}), say, event)
         return
     say(f":warning: Unhandled inline op `{op}`")
 
@@ -608,8 +608,19 @@ def _handle_open(args: dict, say, event: dict = None):
     session_id = None
     project_path = None
 
+    # Check if the argument is a numbered session reference (#1, #2, etc.)
+    if project_name.startswith("#"):
+        resolved = _resolve_session_ref(project_name)
+        if resolved:
+            session_id = resolved["session_id"]
+            project_path = resolved.get("project_path")
+            project_name = resolved.get("project_name") or "unknown"
+        else:
+            say(f":warning: No session `{project_name}`. Use `!sessions` to list.")
+            return
+
     # If used inside a thread, try to resume that thread's headless session
-    if thread_ts:
+    elif thread_ts:
         existing = sessions.get_session_for_thread(thread_ts)
         if existing:
             session_id = existing["session_id"]
@@ -675,20 +686,17 @@ def _handle_open(args: dict, say, event: dict = None):
 
 
 def _handle_sessions(say):
-    """List all headless sessions with details."""
+    """List all headless sessions with numbered shortcuts."""
     all_sessions = sessions.list_sessions()
     if not all_sessions:
         say(":zap: No active headless sessions.")
         return
 
     lines = [f"*Headless sessions* ({len(all_sessions)})"]
+    lines.append("_Use `!open #N` or `!kill #N` with the number below._\n")
     for i, s in enumerate(all_sessions[:15], 1):
-        ts = s["thread_ts"]
-        sid = s["session_id"]
         proj = s.get("project_name") or "?"
-        path = s.get("project_path") or "?"
 
-        created = s.get("created_at", 0)
         last = s.get("last_active", 0)
         age = int(time.time() - last)
         if age < 60:
@@ -698,18 +706,8 @@ def _handle_sessions(say):
         else:
             age_str = f"{age // 3600}h ago"
 
-        created_ago = int(time.time() - created)
-        if created_ago < 3600:
-            created_str = f"{created_ago // 60}m ago"
-        else:
-            created_str = f"{created_ago // 3600}h ago"
-
         lines.append(
-            f"\n*{i}.* Project: `{proj}`\n"
-            f"  Thread: `{ts}`\n"
-            f"  Session: `{sid[:20]}…`\n"
-            f"  Created: {created_str} | Last active: {age_str}\n"
-            f"  Path: `{path}`"
+            f"*#{i}*  `{proj}` — active {age_str}"
         )
 
     if len(all_sessions) > 15:
@@ -718,30 +716,62 @@ def _handle_sessions(say):
     say("\n".join(lines))
 
 
-def _handle_kill(args: dict, say):
-    """Remove a thread-session mapping."""
-    thread_ts = args.get("thread_ts", "").strip()
+def _resolve_session_ref(ref: str) -> dict | None:
+    """Resolve a session reference to a session entry.
 
-    if not thread_ts:
+    Accepts:
+      - '#N' — numbered shortcut from !sessions list
+      - raw thread_ts string
+    Returns the session dict with 'thread_ts' key, or None.
+    """
+    all_sessions = sessions.list_sessions()
+    if not all_sessions:
+        return None
+
+    # Numbered shortcut: #1, #2, etc.
+    if ref.startswith("#"):
+        try:
+            idx = int(ref[1:]) - 1
+            if 0 <= idx < len(all_sessions):
+                return all_sessions[idx]
+        except ValueError:
+            pass
+        return None
+
+    # Raw thread_ts lookup
+    entry = sessions.get_session_for_thread(ref)
+    if entry:
+        return {"thread_ts": ref, **entry}
+    return None
+
+
+def _handle_kill(args: dict, say, event: dict = None):
+    """Remove a thread-session mapping. Accepts #N, thread_ts, or in-thread context."""
+    ref = args.get("thread_ts", "").strip()
+
+    # If no arg and used in a thread, target that thread
+    if not ref and event:
+        ref = event.get("thread_ts", "")
+
+    if not ref:
         say(
-            ":warning: Usage: `!kill <thread_ts>`\n"
-            "Use `!sessions` to find the thread_ts value."
+            ":warning: Usage: `!kill #N` or `!kill <thread_ts>`\n"
+            "Use `!sessions` to find the session number. Or reply `!kill` in a session thread."
         )
         return
 
-    existing = sessions.get_session_for_thread(thread_ts)
-    if not existing:
-        say(f":warning: No session found for thread `{thread_ts}`.")
+    resolved = _resolve_session_ref(ref)
+    if not resolved:
+        say(f":warning: No session found for `{ref}`. Use `!sessions` to list.")
         return
 
-    proj = existing.get("project_name") or "?"
-    sid = existing["session_id"]
+    thread_ts = resolved["thread_ts"]
+    proj = resolved.get("project_name") or "?"
+    sid = resolved["session_id"]
     sessions.delete_session(thread_ts)
     say(
-        f":wastebasket: Removed session mapping:\n"
-        f"  Thread: `{thread_ts}`\n"
-        f"  Session: `{sid[:20]}…`\n"
-        f"  Project: `{proj}`\n"
+        f":wastebasket: Removed session *#{ref[1:] if ref.startswith('#') else ''}* "
+        f"(`{proj}`)\n"
         f"The cortex session still exists — you can `--resume {sid}` manually."
     )
     log.info("Killed session mapping: thread=%s session=%s project=%s", thread_ts, sid, proj)

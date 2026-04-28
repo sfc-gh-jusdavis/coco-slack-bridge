@@ -72,8 +72,6 @@ def parse(text: str) -> dict[str, Any] | None:
         return {"kind": "inline", "op": "sessions"}
 
     if head == "kill":
-        if not rest.strip():
-            return {"kind": "error", "message": "Usage: `!kill <thread_ts>` — use `!sessions` to find the thread_ts."}
         return {"kind": "inline", "op": "kill", "args": {"thread_ts": rest.strip()}}
 
     if head == "task":
@@ -201,8 +199,8 @@ HELP_TEXT = (
     "`!sessions` — detailed list of all headless sessions\n"
     "`!use <name>` — switch the active project (routes free-text DMs)\n"
     "`!new <name> [prompt]` — start a new headless session in a project\n"
-    "`!open [name]` — open interactive Terminal (in a thread: resumes that session)\n"
-    "`!kill <thread_ts>` — remove a thread-session mapping\n"
+    "`!open [#N|name]` — open interactive Terminal (in a thread: resumes that session)\n"
+    "`!kill [#N]` — remove a session (or reply `!kill` in a thread)\n"
     "`!mode [headless|terminal]` — show or switch bridge mode\n"
     "`!task add [priority] <title> :: <description>` — create SnowBoard task "
     "(priority: urgent|high|medium|low|none, default medium)\n"
