@@ -457,6 +457,9 @@ def _handle_inline(parsed: dict, say, event: dict = None, client=None):
     if op == "kill":
         _handle_kill(parsed.get("args", {}), say, event)
         return
+    if op == "killall":
+        _handle_killall(say)
+        return
     say(f":warning: Unhandled inline op `{op}`")
 
 
@@ -777,6 +780,21 @@ def _handle_kill(args: dict, say, event: dict = None):
         f"The cortex session still exists — you can `--resume {sid}` manually."
     )
     log.info("Killed session mapping: thread=%s session=%s project=%s", thread_ts, sid, proj)
+
+
+def _handle_killall(say):
+    """Remove all headless session mappings."""
+    all_sessions = sessions.list_sessions()
+    if not all_sessions:
+        say(":zap: No headless sessions to remove.")
+        return
+
+    count = len(all_sessions)
+    for s in all_sessions:
+        sessions.delete_session(s["thread_ts"])
+
+    say(f":wastebasket: Removed all *{count}* headless session mappings.")
+    log.info("Killed all %d headless session mappings", count)
 
 
 def _extract_confirmation_id(body: dict) -> str:
