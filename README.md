@@ -41,7 +41,7 @@ Each Slack thread maps to its own cortex session. Start new sessions with `!new`
 ### 1. Create a Slack App
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From scratch**
-2. Name it something like `CoCo Bridge`, select your workspace
+2. Name it `<YourName> Bridge` (e.g., `Justin Bridge`) — each user creates their own app, so unique names avoid confusion in the workspace
 
 **Enable Socket Mode:**
 3. Go to **Socket Mode** (left sidebar) → toggle **Enable Socket Mode** on
