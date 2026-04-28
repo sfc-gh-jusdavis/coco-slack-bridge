@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -228,6 +229,61 @@ def set_poll_interval(seconds: int) -> int:
     return seconds
 
 
+# ---------------------------------------------------------------------------
+# Headless mode configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_HEADLESS_TIMEOUT = 120  # seconds per cortex invocation
+DEFAULT_HEADLESS_MAX_TURNS = 10
+
+
+def get_bridge_mode() -> str:
+    """Return 'headless' or 'terminal'. Headless is the default."""
+    raw = os.environ.get("COCO_BRIDGE_MODE")
+    if raw is None:
+        raw = _load_file_config().get("bridge_mode")
+    if isinstance(raw, str) and raw.strip().lower() in {"headless", "terminal"}:
+        return raw.strip().lower()
+    return "headless"
+
+
+def set_bridge_mode(mode: str) -> str:
+    """Persist bridge mode ('headless' or 'terminal')."""
+    mode = mode.strip().lower()
+    if mode not in {"headless", "terminal"}:
+        mode = "headless"
+    ensure_dirs()
+    cfg = _load_file_config()
+    cfg["bridge_mode"] = mode
+    tmp = CONFIG_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=2)
+    tmp.replace(CONFIG_FILE)
+    return mode
+
+
+def get_headless_timeout() -> int:
+    raw = os.environ.get("COCO_HEADLESS_TIMEOUT")
+    if raw is None:
+        raw = _load_file_config().get("headless_timeout")
+    try:
+        val = int(raw) if raw is not None else DEFAULT_HEADLESS_TIMEOUT
+    except (TypeError, ValueError):
+        val = DEFAULT_HEADLESS_TIMEOUT
+    return max(30, min(600, val))
+
+
+def get_headless_max_turns() -> int:
+    raw = os.environ.get("COCO_HEADLESS_MAX_TURNS")
+    if raw is None:
+        raw = _load_file_config().get("headless_max_turns")
+    try:
+        val = int(raw) if raw is not None else DEFAULT_HEADLESS_MAX_TURNS
+    except (TypeError, ValueError):
+        val = DEFAULT_HEADLESS_MAX_TURNS
+    return max(1, min(50, val))
+
+
 def get_wake_enabled() -> bool:
     raw = os.environ.get("COCO_BRIDGE_WAKE_ENABLED")
     if raw is None:
@@ -277,3 +333,89 @@ def clear_thread_ts(session_id: str | None = None):
             tf.unlink()
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Thread-session registry — maps Slack thread_ts → CoCo session_id
+# ---------------------------------------------------------------------------
+
+THREAD_SESSIONS_FILE = BRIDGE_DIR / "thread_sessions.json"
+
+
+def _read_thread_sessions() -> dict:
+    if not THREAD_SESSIONS_FILE.exists():
+        return {}
+    try:
+        with open(THREAD_SESSIONS_FILE) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_thread_sessions(data: dict):
+    ensure_dirs()
+    tmp = THREAD_SESSIONS_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    tmp.replace(THREAD_SESSIONS_FILE)
+
+
+def get_session_for_thread(thread_ts: str) -> dict | None:
+    """Look up the session mapping for a Slack thread.
+
+    Returns {"session_id": ..., "project": ..., "created_at": ..., "last_active": ...}
+    or None if not mapped.
+    """
+    data = _read_thread_sessions()
+    entry = data.get(thread_ts)
+    if entry:
+        # Touch last_active on read
+        entry["last_active"] = time.time()
+        data[thread_ts] = entry
+        _write_thread_sessions(data)
+    return entry
+
+
+def register_thread_session(
+    thread_ts: str,
+    session_id: str,
+    project_name: str | None = None,
+) -> None:
+    """Map a Slack thread to a CoCo session."""
+    data = _read_thread_sessions()
+    now = time.time()
+    data[thread_ts] = {
+        "session_id": session_id,
+        "project": project_name,
+        "created_at": now,
+        "last_active": now,
+    }
+    _write_thread_sessions(data)
+
+
+def get_thread_for_session(session_id: str) -> str | None:
+    """Reverse lookup: find the thread_ts mapped to a session_id."""
+    data = _read_thread_sessions()
+    for ts, entry in data.items():
+        if entry.get("session_id") == session_id:
+            return ts
+    return None
+
+
+def list_thread_sessions() -> list[dict]:
+    """Return all thread-session mappings as a list of dicts."""
+    data = _read_thread_sessions()
+    out = []
+    for ts, entry in sorted(data.items(), key=lambda kv: kv[1].get("last_active", 0), reverse=True):
+        out.append({"thread_ts": ts, **entry})
+    return out
+
+
+def remove_thread_session(thread_ts: str) -> bool:
+    """Remove a thread-session mapping. Returns True if it existed."""
+    data = _read_thread_sessions()
+    if thread_ts in data:
+        del data[thread_ts]
+        _write_thread_sessions(data)
+        return True
+    return False

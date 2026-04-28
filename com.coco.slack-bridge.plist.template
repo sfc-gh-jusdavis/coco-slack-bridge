@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.coco.slack-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/Apps/coco-slack-bridge/.venv/bin/python</string>
+        <string>-m</string>
+        <string>cortex_slack_bridge.bridge</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__/Apps/coco-slack-bridge</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/coco-slack-bridge.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/coco-slack-bridge.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/Apps/coco-slack-bridge/.venv/bin:__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+</dict>
+</plist>

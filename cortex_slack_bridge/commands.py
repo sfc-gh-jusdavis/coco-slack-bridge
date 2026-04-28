@@ -48,6 +48,9 @@ def parse(text: str) -> dict[str, Any] | None:
     if head in {"status", "session"}:
         return {"kind": "inline", "op": "status"}
 
+    if head == "threads":
+        return {"kind": "inline", "op": "threads"}
+
     if head == "use":
         if not rest:
             return {"kind": "error", "message": "Usage: /use <project-name>"}
@@ -55,6 +58,23 @@ def parse(text: str) -> dict[str, Any] | None:
 
     if head == "new":
         return _parse_new(rest)
+
+    if head == "mode":
+        return {"kind": "inline", "op": "mode", "args": {"mode": rest.split()[0] if rest.strip() else ""}}
+
+    if head == "open":
+        parts = rest.split(None, 1) if rest.strip() else []
+        project = parts[0] if parts else ""
+        prompt = parts[1] if len(parts) > 1 else ""
+        return {"kind": "inline", "op": "open", "args": {"project": project, "prompt": prompt}}
+
+    if head == "sessions":
+        return {"kind": "inline", "op": "sessions"}
+
+    if head == "kill":
+        if not rest.strip():
+            return {"kind": "error", "message": "Usage: `!kill <thread_ts>` — use `!sessions` to find the thread_ts."}
+        return {"kind": "inline", "op": "kill", "args": {"thread_ts": rest.strip()}}
 
     if head == "task":
         return _parse_task(rest)
@@ -65,13 +85,13 @@ def parse(text: str) -> dict[str, Any] | None:
 def _parse_new(rest: str) -> dict[str, Any]:
     """`/new <project-name> [initial prompt]` — request a new CoCo CLI session."""
     if not rest:
-        return {"kind": "error", "message": "Usage: /new <project-name> [initial prompt]"}
+        return {"kind": "error", "message": "Usage: !new <project-name> [initial prompt]"}
     parts = rest.split(None, 1)
     name = parts[0]
     prompt = parts[1] if len(parts) > 1 else ""
     return {
-        "kind": "command",
-        "command": "coco.new_session",
+        "kind": "inline",
+        "op": "new",
         "args": {"project": name, "prompt": prompt},
     }
 
@@ -175,10 +195,15 @@ def _parse_task_status(tail: str) -> dict[str, Any]:
 HELP_TEXT = (
     "*CoCo Bridge commands* (prefix: `!`)\n"
     "`!help` — this help\n"
-    "`!status` — active project, session, inbox age, poll interval\n"
+    "`!status` — bridge mode, active project, sessions\n"
     "`!projects` — list all registered projects and session activity\n"
+    "`!threads` — list active thread-to-session mappings\n"
+    "`!sessions` — detailed list of all headless sessions\n"
     "`!use <name>` — switch the active project (routes free-text DMs)\n"
-    "`!new <name> [prompt]` — ask the agent to start a new CoCo CLI session\n"
+    "`!new <name> [prompt]` — start a new headless session in a project\n"
+    "`!open [name]` — open interactive Terminal (in a thread: resumes that session)\n"
+    "`!kill <thread_ts>` — remove a thread-session mapping\n"
+    "`!mode [headless|terminal]` — show or switch bridge mode\n"
     "`!task add [priority] <title> :: <description>` — create SnowBoard task "
     "(priority: urgent|high|medium|low|none, default medium)\n"
     "`!task list [status]` — list tasks (status: backlog|in_progress|need_approval|review|done)\n"

@@ -5,7 +5,8 @@
 
 set -euo pipefail
 
-BRIDGE="$HOME/Apps/coco-slack-bridge/bin/coco-bridge"
+# Adjust this path if you cloned to a different location
+BRIDGE="${COCO_BRIDGE_PATH:-$HOME/Apps/coco-slack-bridge}/bin/coco-bridge"
 BRIDGE_DIR="$HOME/.cortex-slack-bridge"
 PROJECT_NAME="$(basename "$PWD")"
 

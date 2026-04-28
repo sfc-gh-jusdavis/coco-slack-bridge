@@ -7,6 +7,14 @@ config.json
 *.log
 *.pid
 inbox*.json
+headless_sessions.json
+thread_sessions.json
+projects.json
+data/
+wake_*
+thread_*
+active_session
+history.jsonl
 .DS_Store
 dist/
 build/

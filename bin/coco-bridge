@@ -104,12 +104,13 @@ cmd_status() {
 
 cmd_send() {
     if [[ $# -lt 1 ]]; then
-        echo "Usage: coco-bridge send \"message\" [--type status|success|warning|error]" >&2
+        echo "Usage: coco-bridge send \"message\" [--type status|success|warning|error] [--thread]" >&2
         return 1
     fi
     local message="$1"
     shift
-    "$PYTHON" -m cortex_slack_bridge.notify --session "$SESSION_ID" "$@" "$message"
+    # Message must come last so that --thread (nargs=?) doesn't consume it
+    "$PYTHON" -m cortex_slack_bridge.notify --session "$SESSION_ID" "$@" -- "$message"
 }
 
 cmd_confirm() {

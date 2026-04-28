@@ -27,6 +27,7 @@ from cortex_slack_bridge.config import (
     get_bot_token,
     get_session_id,
     get_session_inbox,
+    get_thread_for_session,
     get_thread_ts,
     get_user_id,
     set_active_session,
@@ -146,7 +147,8 @@ def send_message(
 
     # Resolve thread context
     if thread_ts == "auto":
-        thread_ts = get_thread_ts(sid)
+        # Try per-session thread file first, then thread-session registry
+        thread_ts = get_thread_ts(sid) or get_thread_for_session(sid)
     # Build optional thread kwargs
     thread_kwargs = {}
     if thread_ts:

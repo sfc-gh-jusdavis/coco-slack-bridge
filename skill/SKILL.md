@@ -92,7 +92,9 @@ Every entry has `type`. Process each one in order, then clear the inbox.
 
 ### `reply` — free-text DM
 
-Treat `text` as user input in this session. Respond as you normally would, AND echo a concise 2-3 sentence summary back to Slack via `coco-bridge send "..."`.
+Treat `text` as user input in this session. Respond as you normally would, AND echo a concise 2-3 sentence summary back to Slack via `coco-bridge send --thread "..."` (always use `--thread` so the response lands in the correct Slack thread).
+
+If the entry has a `thread_ts` field, the message came from a specific Slack thread. The bridge has already routed it to the correct session based on the thread-session registry.
 
 ### `command` — structured slash-command from Slack
 
@@ -185,7 +187,58 @@ $BRIDGE set-poll-interval 5            # adjust polling cadence
 
 ## Responding to Slack Messages
 
-Whenever you process a `reply` or `command` entry from the inbox, *always* send a concise response back via `coco-bridge send`. The user is on their phone — 2-3 sentences max, with full detail in the CLI.
+Whenever you process a `reply` or `command` entry from the inbox, *always* send a concise response back via `coco-bridge send --thread`. The user is on their phone — 2-3 sentences max, with full detail in the CLI.
+
+## Thread-per-Agent Routing
+
+The bridge supports mapping Slack threads to specific CoCo sessions. When a thread is mapped, all replies in that thread are routed to the mapped session's inbox instead of the active session.
+
+**How it works:**
+- Top-level DMs (no `thread_ts`) route to the active session (unchanged behavior).
+- Threaded replies (has `thread_ts`) check the thread-session registry first. If a mapping exists, the message goes to that session. Otherwise, falls back to the active session.
+- The `!threads` command lists all active thread-session mappings from Slack.
+
+**Registering a thread mapping:**
+To map the current session to a Slack thread (so future replies in that thread come here), use:
+```python
+# From Python (bridge-side):
+from cortex_slack_bridge.config import register_thread_session
+register_thread_session(thread_ts="1234567890.123456", session_id="abc-123", project_name="my_project")
+```
+
+The `!new` command flow can auto-register: when a new session is spawned from Slack, the bridge maps the originating thread to the new session.
+
+## Plan Approval via Slack
+
+When you enter plan mode (`enter_plan_mode`) and the Slack bridge is active, use this flow instead of relying solely on the CLI for plan confirmation:
+
+1. **Draft the plan** as normal (explore codebase, design approach).
+2. **Send a condensed plan summary to Slack** using the confirm command:
+```bash
+~/Apps/coco-slack-bridge/bin/coco-bridge confirm "Plan: <condensed summary — key steps, files to change, max 10 lines>" --id "plan-$(date +%s)" --timeout 300
+```
+3. **The command blocks** until the user taps Approve or Deny in Slack (5 min timeout).
+4. **Read the result** from stdout:
+   - `approved` → Call `exit_plan_mode` with the full plan and proceed to implement.
+   - `denied` → Send a follow-up to Slack asking what to change: `coco-bridge send --thread "Plan denied. What should I change?"`. Wait for the reply via the inbox, revise, and re-confirm.
+   - `timeout` (exit code 1) → Fall back to CLI confirmation via `exit_plan_mode` as normal.
+
+**Plan summary formatting for Slack** (the user is on their phone — keep it scannable):
+- Start with a one-line title: `*Plan: <feature name>*`
+- List 3-6 key implementation steps as bullet points
+- List the files to be changed
+- End with `Full plan details available in CLI.`
+- Total: 10 lines max. Don't include code snippets or full file paths — just file names.
+
+Example:
+```
+*Plan: Add caching to API layer*
+• Add Redis connection helper to config
+• Wrap fetch_user and fetch_orders with cache decorator
+• Add cache invalidation on write operations
+• Files: config.py, api/users.py, api/orders.py
+Full plan details available in CLI.
+```
 
 ## Proactive Updates on Session Resume
 
@@ -200,6 +253,7 @@ When a session resumes from a context summary and the summary indicates pending 
     "text": "user's message",
     "user": "U02M8RTD1HT",
     "ts": "1234567890.123456",
+    "thread_ts": "1234567890.000001",
     "received_at": 1234567890.123,
     "project": {"name": "slack_v1", "path": "/abs/path"}
   },
@@ -209,6 +263,7 @@ When a session resumes from a context summary and the summary indicates pending 
     "args": {"title": "...", "description": "...", "priority": "high"},
     "user": "U...",
     "ts": "...",
+    "thread_ts": null,
     "received_at": 1234567890.0,
     "project": {"name": "slack_v1", "path": "/abs/path"}
   },
@@ -222,3 +277,5 @@ When a session resumes from a context summary and the summary indicates pending 
   }
 ]
 ```
+
+Note: `thread_ts` is present when the message was sent from within a Slack thread. It is `null` for top-level DMs. The bridge uses this to route threaded replies to the correct session.
